@@ -1,0 +1,390 @@
+import discord
+from discord.ext import commands
+from discord.ui import View, Button
+import random
+import json
+import os
+from dotenv import load_dotenv
+
+# 載入環境變數
+load_dotenv()
+
+# 安全讀取 Token
+TOKEN = os.getenv('TOKEN')
+
+if not TOKEN:
+    print("❌ 錯誤：找不到 TOKEN 環境變數")
+    exit(1)
+
+print(f"✅ Token 已安全載入")
+
+# 初始化 prizes 變量 - 確保是乾淨的字典
+prizes_data = {}  # 改名避免衝突
+
+# 載入之前的資料
+def load_prizes():
+    global prizes_data
+    if os.path.exists('prizes_data.json'):
+        try:
+            with open('prizes_data.json', 'r', encoding='utf-8') as f:
+                loaded_data = json.load(f)
+                # 嚴格驗證資料格式
+                prizes_data = {}
+                for name, data in loaded_data.items():
+                    if (isinstance(name, str) and 
+                        isinstance(data, dict) and 
+                        "participants" in data and 
+                        "winners" in data and
+                        isinstance(data["participants"], list) and
+                        isinstance(data["winners"], int)):
+                        prizes_data[name] = {
+                            "participants": data["participants"],
+                            "winners": data["winners"]
+                        }
+                print(f"✅ 已載入 {len(prizes_data)} 個獎品資料")
+        except Exception as e:
+            print(f"❌ 載入資料失敗: {e}")
+            prizes_data = {}
+            print("ℹ️ 已重置為空資料")
+    else:
+        print("ℹ️ 沒有找到之前的資料，從頭開始")
+
+# 保存資料
+def save_prizes():
+    global prizes_data
+    try:
+        with open('prizes_data.json', 'w', encoding='utf-8') as f:
+            json.dump(prizes_data, f, ensure_ascii=False, indent=2)
+        print(f"💾 已保存 {len(prizes_data)} 個獎品資料")
+    except Exception as e:
+        print(f"❌ 保存資料失敗: {e}")
+
+# 載入資料
+load_prizes()
+
+intents = discord.Intents.default()
+intents.message_content = True
+intents.members = True  # 需要成員意圖
+
+bot = commands.Bot(command_prefix='!', intents=intents)
+
+class LeavePrizeButton(Button):
+    def __init__(self, prize_name):
+        super().__init__(label=f"退出「{prize_name}」抽獎", style=discord.ButtonStyle.danger, custom_id=f"leave_{prize_name}")
+        self.prize_name = prize_name
+
+    async def callback(self, interaction: discord.Interaction):
+        user_id = str(interaction.user.id)
+
+        if self.prize_name in prizes_data and user_id in prizes_data[self.prize_name]["participants"]:
+            prizes_data[self.prize_name]["participants"].remove(user_id)
+            save_prizes()
+            await interaction.response.send_message(f"✅ 你已退出「{self.prize_name}」抽獎。", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"⚠️ 你尚未參加「{self.prize_name}」，無法退出。", ephemeral=True)
+
+class PrizeJoinButton(Button):
+    def __init__(self, prize_name):
+        super().__init__(label=f"參加「{prize_name}」", style=discord.ButtonStyle.primary, custom_id=f"join_{prize_name}")
+        self.prize_name = prize_name
+
+    async def callback(self, interaction: discord.Interaction):
+        user_id = str(interaction.user.id)
+        
+        if self.prize_name not in prizes_data:
+            await interaction.response.send_message(f"❌ 「{self.prize_name}」已不存在。", ephemeral=True)
+            return
+        
+        if user_id in prizes_data[self.prize_name]["participants"]:
+            view = View()
+            view.add_item(LeavePrizeButton(self.prize_name))
+            await interaction.response.send_message(f"⚠️ 你已參加過「{self.prize_name}」的抽獎。", ephemeral=True, view=view)
+            return
+        
+        prizes_data[self.prize_name]["participants"].append(user_id)
+        save_prizes()
+        await interaction.response.send_message(f"✅ 你已成功參加「{self.prize_name}」的抽獎！", ephemeral=True)
+
+class AllParticipantsButton(Button):
+    def __init__(self):
+        super().__init__(label="查看所有參加者清單", style=discord.ButtonStyle.secondary, custom_id="list_all")
+
+    async def callback(self, interaction: discord.Interaction):
+        if not prizes_data:
+            await interaction.response.send_message("📭 目前沒有獎品。", ephemeral=True)
+            return
+        
+        msg = ["🎁 所有獎品參加者清單："]
+        guild = interaction.guild
+        for prize, info in prizes_data.items():
+            msg.append(f"\n📦 {prize}（{info['winners']}人）")
+            if info["participants"]:
+                participant_names = []
+                for participant_id in info["participants"]:
+                    try:
+                        user_id = int(participant_id)
+                        user = guild.get_member(user_id)
+                        if user:
+                            participant_names.append(user.display_name)
+                        else:
+                            participant_names.append(f"ID:{participant_id}")
+                    except ValueError:
+                        participant_names.append(participant_id)
+                
+                msg.append(f"👥 參加者：{', '.join(participant_names)}")
+            else:
+                msg.append("📭 尚無參加者")
+        await interaction.response.send_message("\n".join(msg), ephemeral=True)
+
+class PrizeJoinView(View):
+    def __init__(self, prize_dict):
+        super().__init__(timeout=None)
+        for prize in prize_dict:
+            self.add_item(PrizeJoinButton(prize))
+        self.add_item(AllParticipantsButton())
+
+@bot.event
+async def on_ready():
+    print(f'✅ Bot 已登入：{bot.user}')
+    print(f"DEBUG: Bot 在 {len(bot.guilds)} 個伺服器中")
+    save_prizes()
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def add_prize(ctx, *, prize_input):
+    global prizes_data
+    added = []
+    existed = []
+    for item in [i.strip() for i in prize_input.split(',') if i.strip()]:
+        if ':' in item:
+            name, count = item.split(':', 1)
+            name = name.strip()
+            try:
+                count = int(count.strip())
+            except ValueError:
+                count = 1
+        else:
+            name = item
+            count = 1
+
+        if name in prizes_data:
+            existed.append(name)
+        else:
+            prizes_data[name] = {"participants": [], "winners": count}
+            added.append(f"{name}（{count}人）")
+
+    msg = []
+    if added:
+        msg.append("🎁 已新增獎品：" + ", ".join(added))
+    if existed:
+        msg.append("⚠️ 已存在：" + ", ".join(existed))
+    await ctx.send("\n".join(msg) if msg else "請輸入要新增的獎品名稱。")
+    
+    if added:
+        save_prizes()
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def show_prizes(ctx):
+    if not prizes_data:
+        await ctx.send("📭 目前沒有獎品。請先用 !add_prize 新增。")
+        return
+    description = "請點擊下方按鈕參加你想要的獎品抽獎，或查看所有參加者清單："
+    for prize, info in prizes_data.items():
+        description += f"\n📦 {prize}（{info['winners']}人）"
+    view = PrizeJoinView(prizes_data)
+    await ctx.send(description, view=view)
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def prizes_list(ctx):
+    if not prizes_data:
+        await ctx.send("📭 目前沒有獎品。")
+    else:
+        msg = ["🎁 獎品清單："]
+        for prize, info in prizes_data.items():
+            msg.append(f"\n📦 {prize}（{info['winners']}人）")
+            if info["participants"]:
+                participant_names = []
+                for participant_id in info["participants"]:
+                    try:
+                        user_id = int(participant_id)
+                        user = ctx.guild.get_member(user_id)
+                        if user:
+                            participant_names.append(user.display_name)
+                        else:
+                            participant_names.append(f"ID:{participant_id}")
+                    except ValueError:
+                        participant_names.append(participant_id)
+                
+                msg.append(f"👥 參加者：{', '.join(participant_names)}")
+            else:
+                msg.append("📭 尚無參加者")
+        await ctx.send("\n".join(msg))
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def list(ctx, *, prize_names):
+    names = [n.strip() for n in prize_names.split(',') if n.strip()]
+    msg = []
+    for name in names:
+        if name not in prizes_data:
+            msg.append(f"❌ 沒有這個獎品：「{name}」")
+        elif not prizes_data[name]["participants"]:
+            msg.append(f"📭 「{name}」目前沒有人參加。")
+        else:
+            participant_names = []
+            for participant_id in prizes_data[name]["participants"]:
+                try:
+                    user_id = int(participant_id)
+                    user = ctx.guild.get_member(user_id)
+                    if user:
+                        participant_names.append(user.display_name)
+                    else:
+                        participant_names.append(f"ID:{participant_id}")
+                except ValueError:
+                    participant_names.append(participant_id)
+            
+            participants_str = ", ".join(participant_names)
+            msg.append(f"👥 「{name}」的參加者：{participants_str}")
+    await ctx.send("\n".join(msg) if msg else "請輸入要查詢的獎品名稱。")
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def draw(ctx):
+    global prizes_data
+    
+    # 嚴格檢查 prizes_data
+    print(f"DEBUG: prizes_data 類型: {type(prizes_data)}")
+    print(f"DEBUG: prizes_data 內容: {prizes_data}")
+    
+    if not isinstance(prizes_data, dict):
+        await ctx.send("❌ 獎品資料異常，請重新啟動 Bot")
+        return
+    
+    if not prizes_data:
+        await ctx.send("📭 目前沒有獎品。")
+        return
+
+    msg = []
+    
+    # 安全地獲取獎品名稱列表
+    prize_names = []
+    for key in prizes_data:
+        if isinstance(key, str):
+            prize_names.append(key)
+    
+    print(f"DEBUG: 安全獲取的獎品名稱: {prize_names}")
+    
+    for name in prize_names[:]:  # 使用切片創建副本
+        print(f"DEBUG: 處理獎品: {name}")
+        
+        if name not in prizes_data:
+            print(f"DEBUG: 獎品 {name} 已不存在，跳過")
+            continue
+        
+        info = prizes_data[name]
+        participants = info.get("participants", [])
+        winner_count = info.get("winners", 1)
+        
+        print(f"DEBUG: 獎品 {name} - 參加者: {len(participants)}, 得主數: {winner_count}")
+        
+        if not participants:
+            msg.append(f"😢 「{name}」沒有人參加，無法抽獎。")
+        else:
+            actual_winners = min(winner_count, len(participants))
+            try:
+                winners = random.sample(participants, actual_winners)
+                print(f"DEBUG: 抽中: {winners}")
+                
+                # 建立 @mention 列表
+                mention_list = []
+                
+                for participant_id in winners:
+                    print(f"DEBUG: 處理參加者: {participant_id} (類型: {type(participant_id)})")
+                    
+                    user = None
+                    try:
+                        # 嘗試轉換為整數 ID
+                        user_id = int(participant_id)
+                        print(f"DEBUG: 解析為 ID: {user_id}")
+                        
+                        # 先嘗試 get_member
+                        user = ctx.guild.get_member(user_id)
+                        if not user:
+                            # 再嘗試 fetch_member
+                            print(f"DEBUG: get_member 失敗，嘗試 fetch_member")
+                            try:
+                                user = await ctx.guild.fetch_member(user_id)
+                                print(f"DEBUG: fetch_member 成功")
+                            except Exception as e:
+                                print(f"DEBUG: fetch_member 失敗: {e}")
+                        
+                        if user:
+                            print(f"DEBUG: 成功找到用戶: {user.display_name} (ID: {user.id})")
+                            mention_list.append(user.mention)
+                        else:
+                            print(f"DEBUG: 找不到用戶 ID {user_id}")
+                            # 嘗試根據名稱查找
+                            for member in ctx.guild.members:
+                                if str(member.id) == participant_id:
+                                    user = member
+                                    mention_list.append(user.mention)
+                                    print(f"DEBUG: 通過成員列表找到: {user.display_name}")
+                                    break
+                            else:
+                                mention_list.append(f"**ID:{participant_id}**")
+                                
+                    except ValueError:
+                        print(f"DEBUG: 非數字 ID，視為舊資料: {participant_id}")
+                        # 舊資料格式，嘗試名稱匹配
+                        for member in ctx.guild.members:
+                            if (member.display_name == participant_id or 
+                                member.name == participant_id):
+                                user = member
+                                mention_list.append(user.mention)
+                                print(f"DEBUG: 名稱匹配成功: {user.display_name}")
+                                break
+                        else:
+                            mention_list.append(f"**@{participant_id}**")
+                
+                # 建立得獎訊息
+                if len(winners) == 1:
+                    winner_mentions = mention_list[0]
+                else:
+                    winner_mentions = "、".join(mention_list[:-1]) + f" 和 {mention_list[-1]}"
+                
+                msg.append(f"🎉 恭喜 {winner_mentions} 獲得「{name}」！")
+                
+            except ValueError as e:
+                print(f"DEBUG: 抽獎錯誤: {e}")
+                msg.append(f"😢 「{name}」參加者不足以抽出 {winner_count} 名得主。")
+        
+        # 刪除獎品
+        if name in prizes_data:
+            del prizes_data[name]
+            print(f"DEBUG: 已刪除獎品 {name}")
+    
+    # 發送結果
+    if msg:
+        await ctx.send("\n".join(msg))
+    else:
+        await ctx.send("沒有可處理的獎品。")
+    
+    save_prizes()
+    print("DEBUG: 抽獎完成")
+
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ 你沒有權限使用這個指令。")
+    else:
+        print(f"DEBUG: 指令錯誤: {error}")
+        raise error
+
+@bot.event
+async def on_disconnect():
+    save_prizes()
+    print("👋 Bot 斷線，已保存資料")
+
+bot.run(TOKEN)
