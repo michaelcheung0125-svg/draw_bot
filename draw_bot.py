@@ -5,6 +5,7 @@ import random
 import json
 import os
 from dotenv import load_dotenv
+import keep_alive
 
 # 載入環境變數
 load_dotenv()
@@ -387,4 +388,5 @@ async def on_disconnect():
     save_prizes()
     print("👋 Bot 斷線，已保存資料")
 
+keep_alive.keep_alive()
 bot.run(TOKEN)
