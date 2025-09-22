@@ -375,24 +375,33 @@ async def draw(ctx):
     save_prizes()
     print("DEBUG: 抽獎完成")
 
-import random
-
 @bot.command()
 @commands.cooldown(1, 60, commands.BucketType.user)
-async def 佳偉(ctx):
+async def 啊偉(ctx):
     responses = [
-        "佳偉～～～～～～～又在睡午覺啦？快醒醒！",
-        "佳偉～～～～～～～手機又掉馬桶裡了嗎？",
-        "佳偉～～～～～～～跑去哪偷吃零食啦？",
-        "佳偉～～～～～～～你的Wi-Fi又斷線了吧？",
-        "佳偉～～～～～～～別躲啦，聚會開始囉！",
-        "佳偉～～～～～～～還在跟NPC吵架嗎？",
-        "佳偉～～～～～～～快來，派對缺你不行！",
-        "佳偉～～～～～～～是不是又迷路到隔壁伺服器？",
-        "佳偉～～～～～～～別裝酷啦，大家都在等你！",
-        "佳偉～～～～～～～你的傳說級拖延症又發作了？"
+        "啊～～～～～～偉～～～～～～～又在睡午覺啦？快醒醒！",
+        "啊～～～～～～偉～～～～～～～手機又掉馬桶裡了嗎？",
+        "啊～～～～～～偉～～～～～～～跑去哪偷吃零食啦？",
+        "啊～～～～～～偉～～～～～～～你的Wi-Fi又斷線了吧？",
+        "啊～～～～～～偉～～～～～～～別躲啦，聚會開始囉！",
+        "啊～～～～～～偉～～～～～～～還在跟NPC吵架嗎？",
+        "啊～～～～～～偉～～～～～～～快來，派對缺你不行！",
+        "啊～～～～～～偉～～～～～～～是不是又迷路到隔壁伺服器？",
+        "啊～～～～～～偉～～～～～～～別裝酷啦，大家都在等你！",
+        "啊～～～～～～偉～～～～～～～你的傳說級拖延症又發作了？"
     ]
     await ctx.send(random.choice(responses))
+
+
+@bot.event
+async def on_member_join(member):
+    welcome_message = "新成員進來請把名字改成遊戲裡的，方便識別，改完後請脫。"
+    # Option 1: Send to a specific channel (replace CHANNEL_ID with your channel ID)
+    channel = member.guild.get_channel(1301173686899838988)  # Replace CHANNEL_ID with actual ID
+    if channel:
+        await channel.send(f"{member.mention} {welcome_message}")
+    else:
+        print(f"DEBUG: Welcome channel (ID: {CHANNEL_ID}) not found")
 
 
 @bot.event
