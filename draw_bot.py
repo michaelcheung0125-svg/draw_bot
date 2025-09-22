@@ -375,6 +375,26 @@ async def draw(ctx):
     save_prizes()
     print("DEBUG: 抽獎完成")
 
+import random
+
+@bot.command()
+@commands.cooldown(1, 60, commands.BucketType.user)
+async def 佳偉(ctx):
+    responses = [
+        "佳偉～～～～～～～又在睡午覺啦？快醒醒！",
+        "佳偉～～～～～～～手機又掉馬桶裡了嗎？",
+        "佳偉～～～～～～～跑去哪偷吃零食啦？",
+        "佳偉～～～～～～～你的Wi-Fi又斷線了吧？",
+        "佳偉～～～～～～～別躲啦，聚會開始囉！",
+        "佳偉～～～～～～～還在跟NPC吵架嗎？",
+        "佳偉～～～～～～～快來，派對缺你不行！",
+        "佳偉～～～～～～～是不是又迷路到隔壁伺服器？",
+        "佳偉～～～～～～～別裝酷啦，大家都在等你！",
+        "佳偉～～～～～～～你的傳說級拖延症又發作了？"
+    ]
+    await ctx.send(random.choice(responses))
+
+
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
