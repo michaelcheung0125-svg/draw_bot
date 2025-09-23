@@ -6,6 +6,7 @@ import json
 import os
 from dotenv import load_dotenv
 import keep_alive
+import logging
 
 # 載入環境變數
 load_dotenv()
