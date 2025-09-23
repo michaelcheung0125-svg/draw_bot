@@ -169,10 +169,14 @@ class PaginationView(View):
         # 參加抽獎按鈕（當前頁的獎品）
         start_idx = self.current_page * self.page_size
         end_idx = min(start_idx + self.page_size, len(self.prize_dict))
-        prize_keys = list(self.prize_dict.keys())
-        logging.debug(f"更新按鈕: 當前頁 {self.current_page}, 顯示獎品索引 {start_idx} 到 {end_idx}")
-        for prize in prize_keys[start_idx:end_idx]:
-            self.add_item(PrizeJoinButton(prize))
+        try:
+            prize_keys = list(self.prize_dict.keys())  # 明確轉為列表
+            logging.debug(f"prize_keys 類型: {type(prize_keys)}, 內容: {prize_keys[:5]}...")  # 記錄前 5 項
+            for prize in prize_keys[start_idx:end_idx]:
+                self.add_item(PrizeJoinButton(prize))
+        except Exception as e:
+            logging.error(f"生成按鈕失敗: {e}")
+            raise
         # 查看所有參加者按鈕
         self.add_item(AllParticipantsButton())
 
@@ -203,11 +207,19 @@ class PaginationView(View):
         else:
             start_idx = self.current_page * self.page_size
             end_idx = min(start_idx + self.page_size, len(self.prize_dict))
-            for prize, info in list(self.prize_dict.items())[start_idx:end_idx]:
+            try:
+                for prize, info in list(self.prize_dict.items())[start_idx:end_idx]:
+                    embed.add_field(
+                        name=f"📦 {prize}",
+                        value=f"**得獎人數**：{info['winners']}\n**參加者**：{len(info['participants'])} 人",
+                        inline=True
+                    )
+            except Exception as e:
+                logging.error(f"生成嵌入欄位失敗: {e}")
                 embed.add_field(
-                    name=f"📦 {prize}",
-                    value=f"**得獎人數**：{info['winners']}\n**參加者**：{len(info['participants'])} 人",
-                    inline=True
+                    name="❌ 錯誤",
+                    value="無法顯示獎品清單，請聯繫管理員。",
+                    inline=False
                 )
         embed.set_footer(text=f"頁數：{self.current_page + 1}/{self.total_pages} | 請遵守抽獎規則！")
         return embed
