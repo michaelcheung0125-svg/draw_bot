@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 import logging
 import math
 import keep_alive
+import asyncio
 
 # 載入環境變數
 load_dotenv()
