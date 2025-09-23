@@ -117,16 +117,33 @@ class AllParticipantsButton(Button):
             await interaction.response.send_message("📭 目前沒有獎品。", ephemeral=True)
             return
         
-        msg = ["🎁 所有獎品參加者清單："]
         guild = interaction.guild
-        for prize, info in prizes_data.items():
-            msg.append(f"\n📦 {prize}（{info['winners']}人）")
-            if info["participants"]:
+        prize_items = list(prizes_data.items())
+        page_size = 10  # 每頁最多 10 項獎品
+        total_pages = math.ceil(len(prize_items) / page_size)
+
+        for page in range(total_pages):
+            start_idx = page * page_size
+            end_idx = min(start_idx + page_size, len(prize_items))
+            embed = discord.Embed(
+                title=f"🎁 所有獎品參加者清單 (頁 {page + 1}/{total_pages})",
+                description="以下是各獎品的參加者名單：",
+                color=discord.Color.red()
+            )
+            
+            for prize, info in prize_items[start_idx:end_idx]:
                 participant_names = []
                 for participant_id in info["participants"]:
                     try:
                         user_id = int(participant_id)
                         user = guild.get_member(user_id)
+                        if not user:
+                            try:
+                                user = await guild.fetch_member(user_id)
+                            except discord.NotFound:
+                                user = None
+                            except Exception as e:
+                                logging.error(f"fetch_member 失敗: {e}")
                         if user:
                             participant_names.append(user.display_name)
                         else:
@@ -134,11 +151,15 @@ class AllParticipantsButton(Button):
                     except ValueError:
                         participant_names.append(participant_id)
                 
-                msg.append(f"👥 參加者：{', '.join(participant_names)}")
-            else:
-                msg.append("📭 尚無參加者")
-        await interaction.response.send_message("\n".join(msg), ephemeral=True)
-
+                participants_str = ", ".join(participant_names) if participant_names else "📭 尚無參加者"
+                embed.add_field(
+                    name=f"📦 {prize}（{info['winners']}人）",
+                    value=f"👥 參加者：{participants_str}",
+                    inline=False
+                )
+            
+            embed.set_footer(text="請遵守抽獎規則！")
+            await interaction.response.send_message(embed=embed, ephemeral=True) if page == 0 else await interaction.followup.send(embed=embed, ephemeral=True)
 
 # 設置日誌
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -214,14 +235,6 @@ async def show_prizes(ctx):
         
         embed.set_footer(text="請遵守抽獎規則！")
         await ctx.send(embed=embed, view=view)
-    
-
-class PrizeJoinView(View):
-    def __init__(self, prize_dict):
-        super().__init__(timeout=None)
-        for prize in prize_dict:
-            self.add_item(PrizeJoinButton(prize))
-        self.add_item(AllParticipantsButton())
 
 @bot.event
 async def on_ready():
@@ -262,7 +275,6 @@ async def add_prize(ctx, *, prize_input):
     
     if added:
         save_prizes()
-
 
 @bot.command()
 @commands.has_permissions(administrator=True)
@@ -460,7 +472,6 @@ async def 啊偉(ctx):
     ]
     await ctx.send(random.choice(responses))
 
-
 @bot.event
 async def on_member_join(member):
     welcome_message = "新成員進來請把名字改成遊戲裡的，方便識別，改完後請脫。"
@@ -469,8 +480,7 @@ async def on_member_join(member):
     if channel:
         await channel.send(f"{member.mention} {welcome_message}")
     else:
-        print(f"DEBUG: Welcome channel (ID: {CHANNEL_ID}) not found")
-
+        print(f"DEBUG: Welcome channel (ID: 1301173686899838988) not found")
 
 @bot.event
 async def on_command_error(ctx, error):
@@ -484,12 +494,6 @@ async def on_command_error(ctx, error):
 async def on_disconnect():
     save_prizes()
     print("👋 Bot 斷線，已保存資料")
-
-# 定義內建類型（避免被覆蓋的 list 影響）
-_builtin_list = list
-_builtin_dict = dict
-_builtin_str = str
-_builtin_int = int
 
 @bot.command()
 @commands.has_permissions(administrator=True)
