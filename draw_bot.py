@@ -7,6 +7,8 @@ import os
 from dotenv import load_dotenv
 import keep_alive
 import logging
+import base64  # 用來編碼檔案內容，避免 Discord 限制
+
 
 # 載入環境變數
 load_dotenv()
@@ -520,6 +522,53 @@ async def on_command_error(ctx, error):
 async def on_disconnect():
     save_prizes()
     print("👋 Bot 斷線，已保存資料")
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def backup(ctx):
+    global prizes_data
+    if not isinstance(prizes_data, dict):
+        await ctx.send("❌ 獎品資料異常，無法備份。")
+        return
+    try:
+        # 讀取檔案
+        with open('prizes_data.json', 'r', encoding='utf-8') as f:
+            file_content = f.read()
+        
+        # 將內容編碼為 base64（避免 Discord 檔案上傳限制，如果內容過長）
+        encoded_content = base64.b64encode(file_content.encode('utf-8')).decode('utf-8')
+        
+        # 發送為檔案附件（如果內容小）或文字（編碼後）
+        if len(file_content) < 8000:  # Discord 訊息限制
+            await ctx.send(f"✅ 備份內容（Base64 編碼）：\n```{encoded_content}```\n解碼後可還原為 JSON。")
+        else:
+            # 上傳為檔案
+            with open('prizes_data_backup.json', 'w', encoding='utf-8') as f:
+                f.write(file_content)
+            with open('prizes_data_backup.json', 'rb') as f:
+                await ctx.send("✅ 備份檔案：", file=discord.File(f, 'prizes_data_backup.json'))
+            os.remove('prizes_data_backup.json')  # 刪除臨時檔案
+        
+        logging.debug(f"備份執行成功，用戶: {ctx.author.id}")
+    except FileNotFoundError:
+        await ctx.send("❌ 找不到 prizes_data.json 檔案。")
+    except Exception as e:
+        await ctx.send(f"❌ 備份失敗：{e}")
+        logging.error(f"備份錯誤: {e}")
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def restore(ctx, *, json_content=None):
+    global prizes_data
+    if not json_content:
+        await ctx.send("❌ 請提供 JSON 內容（例如貼上檔案內容）。")
+        return
+    try:
+        prizes_data = json.loads(json_content)
+        save_prizes()
+        await ctx.send("✅ 還原成功！")
+    except Exception as e:
+        await ctx.send(f"❌ 還原失敗：{e}")        
 
 keep_alive.keep_alive()
 bot.run(TOKEN)
