@@ -7,6 +7,7 @@ import os
 from dotenv import load_dotenv
 import logging
 import math
+import keep_alive
 
 # 載入環境變數
 load_dotenv()
@@ -559,5 +560,5 @@ async def restore(ctx):
         logging.error(f"還原錯誤: {e}")
         await ctx.send(f"❌ 還原失敗：{e}")
 
-
+keep_alive.keep_alive()
 bot.run(TOKEN)
