@@ -5,9 +5,9 @@ import random
 import json
 import os
 from dotenv import load_dotenv
+import keep_alive
 import logging
 import math
-import keep_alive
 import asyncio
 
 # 載入環境變數
@@ -23,7 +23,7 @@ if not TOKEN:
 print(f"✅ Token 已安全載入")
 
 # 初始化 prizes 變量 - 確保是乾淨的字典
-prizes_data = {}  # 改名避免衝突
+prizes_data = {}
 
 # 載入之前的資料
 def load_prizes():
@@ -125,10 +125,11 @@ class AllParticipantsButton(Button):
             # 緩存當前伺服器成員
             guild = interaction.guild
             member_cache = {member.id: member for member in guild.members}
-            logging.debug(f"已緩存 {len(member_cache)} 個成員")
+            logging.debug(f"已緩存 {len(member_cache)} 個成員（guild.members）")
+            fetch_count = 0  # 計數 fetch_member 調用次數
 
             prize_items = list(prizes_data.items())
-            page_size = 5  # 每頁最多 5 項獎品，減少第一頁處理時間
+            page_size = 5  # 每頁最多 5 項獎品
             total_pages = math.ceil(len(prize_items) / page_size)
 
             for page in range(total_pages):
@@ -142,39 +143,76 @@ class AllParticipantsButton(Button):
                 
                 for prize, info in prize_items[start_idx:end_idx]:
                     participant_names = []
-                    for participant_id in info["participants"]:
+                    participants_to_show = info["participants"][:10]  # 最多顯示 10 人
+                    for participant_id in participants_to_show:
                         try:
                             user_id = int(participant_id)
                             # 優先使用緩存
                             user = member_cache.get(user_id)
                             if not user:
-                                try:
-                                    user = await guild.fetch_member(user_id)
-                                    member_cache[user_id] = user
-                                    logging.debug(f"fetch_member 成功: {user_id}")
-                                except discord.NotFound:
-                                    user = None
-                                except Exception as e:
-                                    logging.error(f"fetch_member 失敗: {e}")
+                                if fetch_count < 50:  # 限制最大 fetch_member 調用次數
+                                    try:
+                                        user = await guild.fetch_member(user_id)
+                                        member_cache[user_id] = user
+                                        logging.debug(f"fetch_member 成功: {user_id}")
+                                        fetch_count += 1
+                                        if fetch_count % 10 == 0:  # 每 10 次延遲 1 秒
+                                            await asyncio.sleep(1.0)
+                                    except discord.NotFound:
+                                        logging.debug(f"用戶 {user_id} 不在伺服器")
+                                        user = None
+                                    except Exception as e:
+                                        logging.error(f"fetch_member 失敗: {e}")
+                                        user = None
                             if user:
-                                participant_names.append(user.display_name)
+                                name = user.display_name or user.name or user.mention
+                                participant_names.append(name)
+                                logging.debug(f"用戶 {user_id}: {name}")
                             else:
                                 participant_names.append(f"ID:{participant_id}")
+                                logging.debug(f"用戶 {user_id}: 顯示為 ID:{participant_id}")
                         except ValueError:
-                            participant_names.append(participant_id)
+                            # 處理舊資料格式（非數字 ID）
+                            user = None
+                            for member in member_cache.values():
+                                if member.display_name == participant_id or member.name == participant_id:
+                                    user = member
+                                    break
+                            if user:
+                                name = user.display_name or user.name or user.mention
+                                participant_names.append(name)
+                                logging.debug(f"舊格式 ID {participant_id}: {name}")
+                            else:
+                                participant_names.append(f"ID:{participant_id}")
+                                logging.debug(f"舊格式 ID {participant_id}: 顯示為 ID:{participant_id}")
                     
                     participants_str = ", ".join(participant_names) if participant_names else "📭 尚無參加者"
+                    if len(info["participants"]) > 10:
+                        participants_str += " 等..."
                     embed.add_field(
                         name=f"📦 {prize}（{info['winners']}人）",
                         value=f"👥 參加者：{participants_str}",
                         inline=False
                     )
                 
+                # 檢查嵌入大小
+                embed_size = len(str(embed))
+                if embed_size > 6000:
+                    logging.warning(f"頁 {page + 1} 嵌入過大: {embed_size} 字元")
+                    embed = discord.Embed(
+                        title=f"🎁 所有獎品參加者清單 (頁 {page + 1}/{total_pages})",
+                        description="部分參加者清單過長，無法顯示完整內容。",
+                        color=discord.Color.red()
+                    )
+                    embed.add_field(
+                        name="⚠️ 警告",
+                        value="請減少每項獎品的參加者數量或聯繫管理員。",
+                        inline=False
+                    )
+                
                 embed.set_footer(text="請遵守抽獎規則！")
-                # 第一頁使用 followup（因已 defer），後續頁繼續使用 followup
                 await interaction.followup.send(embed=embed, ephemeral=True)
-                # 添加延遲，避免 API 限制
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.2)  # 頁面間延遲減至 0.2 秒
 
         except Exception as e:
             logging.error(f"AllParticipantsButton 錯誤: {e}")
@@ -183,77 +221,91 @@ class AllParticipantsButton(Button):
 # 設置日誌
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# 定義內建類型（避免被覆蓋的 list 影響）
-_builtin_list = list
-_builtin_dict = dict
-_builtin_str = str
-_builtin_int = int
+class PaginationView(View):
+    def __init__(self, prize_dict, page_size=10):
+        super().__init__(timeout=300)
+        if not isinstance(prize_dict, dict):
+            logging.error(f"PaginationView 初始化失敗: prize_dict 類型為 {type(prize_dict)}, 內容: {prize_dict}")
+            raise ValueError("prize_dict 必須是字典")
+        self.prize_dict = prize_dict
+        self.page_size = page_size
+        self.current_page = 0
+        self.total_pages = (len(prize_dict) + page_size - 1) // page_size if prize_dict else 1
+        logging.debug(f"初始化 PaginationView: 總獎品數 {len(prize_dict)}, 總頁數 {self.total_pages}, prize_dict: {[k for k in prize_dict.keys()][:5]}...")
+        self.update_buttons()
 
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def show_prizes(ctx):
-    global prizes_data
-    try:
-        content = _builtin_list(prizes_data.keys())[:5] if isinstance(prizes_data, _builtin_dict) else prizes_data
-        logging.debug(f"執行 !show_prizes, prizes_data 類型: {type(prizes_data)}, 內容: {content}")
-    except Exception as e:
-        logging.error(f"記錄 prizes_data 失敗: {e}")
-    if not isinstance(prizes_data, _builtin_dict):
-        logging.error(f"prizes_data 類型錯誤: {type(prizes_data)}, 內容: {prizes_data}")
-        embed = discord.Embed(
-            title="❌ 錯誤",
-            description="獎品資料異常，請聯繫管理員檢查 prizes_data.json。",
-            color=discord.Color.red()
-        )
-        await ctx.send(embed=embed)
-        return
-    if not prizes_data:
-        embed = discord.Embed(
-            title="📭 無獎品",
-            description="目前沒有獎品。請先用 !add_prize 新增。",
-            color=discord.Color.red()
-        )
-        await ctx.send(embed=embed)
-        return
-
-    # 分頁設定：每頁 12 項
-    page_size = 12
-    prize_items = _builtin_list(prizes_data.items())
-    total_pages = math.ceil(len(prize_items) / page_size)  # 33 項分 3 頁（12、12、9）
-
-    # 發送每頁的嵌入訊息
-    for page in range(total_pages):
-        view = View(timeout=300)  # 每頁獨立的 View
-        start_idx = page * page_size
-        end_idx = min(start_idx + page_size, len(prize_items))
-        embed = discord.Embed(
-            title=f"🎁 焰獄拍賣會獎品清單 (頁 {page + 1}/{total_pages})",
-            description="請點擊下方按鈕參加你想要的獎品抽獎：",
-            color=discord.Color.red()
-        )
+    def update_buttons(self):
+        self.clear_items()
+        prev_button = Button(label="上一頁", style=discord.ButtonStyle.secondary, disabled=self.current_page == 0)
+        prev_button.callback = self.prev_page
+        self.add_item(prev_button)
+        next_button = Button(label="下一頁", style=discord.ButtonStyle.secondary, disabled=self.current_page == self.total_pages - 1)
+        next_button.callback = self.next_page
+        self.add_item(next_button)
+        start_idx = self.current_page * self.page_size
+        end_idx = min(start_idx + self.page_size, len(self.prize_dict))
         try:
-            logging.debug(f"生成頁 {page + 1}: 顯示獎品索引 {start_idx} 到 {end_idx}, 項目: {[name for name, _ in prize_items[start_idx:end_idx]]}")
-            for prize, info in prize_items[start_idx:end_idx]:
-                embed.add_field(
-                    name=f"📦 {prize}",
-                    value=f"**得獎人數**：{info['winners']}\n**參加者**：{len(info['participants'])} 人",
-                    inline=True
-                )
-                view.add_item(PrizeJoinButton(prize))
+            prize_keys = list(self.prize_dict.keys())
+            logging.debug(f"update_buttons: prize_keys 類型: {type(prize_keys)}, 長度: {len(prize_keys)}, 前5項: {prize_keys[:5]}")
+            for prize in prize_keys[start_idx:end_idx]:
+                self.add_item(PrizeJoinButton(prize))
         except Exception as e:
-            logging.error(f"生成嵌入欄位失敗 (頁 {page + 1}): {e}")
+            logging.error(f"生成按鈕失敗: {e}, prize_dict 類型: {type(self.prize_dict)}, keys 類型: {type(self.prize_dict.keys())}")
+            raise
+        self.add_item(AllParticipantsButton())
+
+    async def prev_page(self, interaction: discord.Interaction):
+        self.current_page -= 1
+        self.update_buttons()
+        logging.debug(f"切換到上一頁: 當前頁 {self.current_page}")
+        await interaction.response.edit_message(embed=self.get_embed(), view=self)
+
+    async def next_page(self, interaction: discord.Interaction):
+        self.current_page += 1
+        self.update_buttons()
+        logging.debug(f"切換到下一頁: 當前頁 {self.current_page}")
+        await interaction.response.edit_message(embed=self.get_embed(), view=self)
+
+    def get_embed(self):
+        embed = discord.Embed(
+            title="🎁 焰獄拍賣會獎品清單",
+            description="請點擊下方按鈕參加你想要的獎品抽獎，或查看所有參加者清單：",
+            color=discord.Color.red()
+        )
+        if not self.prize_dict:
             embed.add_field(
-                name="❌ 錯誤",
-                value="無法顯示獎品清單，請聯繫管理員。",
+                name="📭 無獎品",
+                value="目前沒有獎品，請使用 !add_prize 新增。",
                 inline=False
             )
-        
-        # 最後一頁添加「查看所有參加者」按鈕
-        if page == total_pages - 1:
-            view.add_item(AllParticipantsButton())
-        
-        embed.set_footer(text="請遵守抽獎規則！")
-        await ctx.send(embed=embed, view=view)
+        else:
+            start_idx = self.current_page * self.page_size
+            end_idx = min(start_idx + self.page_size, len(self.prize_dict))
+            try:
+                prize_items = list(self.prize_dict.items())[start_idx:end_idx]
+                logging.debug(f"get_embed: 顯示獎品索引 {start_idx} 到 {end_idx}, 項目: {[name for name, _ in prize_items]}")
+                for prize, info in prize_items:
+                    embed.add_field(
+                        name=f"📦 {prize}",
+                        value=f"**得獎人數**：{info['winners']}\n**參加者**：{len(info['participants'])} 人",
+                        inline=True
+                    )
+            except Exception as e:
+                logging.error(f"生成嵌入欄位失敗: {e}, prize_dict 類型: {type(self.prize_dict)}")
+                embed.add_field(
+                    name="❌ 錯誤",
+                    value="無法顯示獎品清單，請聯繫管理員。",
+                    inline=False
+                )
+        embed.set_footer(text=f"頁數：{self.current_page + 1}/{self.total_pages} | 請遵守抽獎規則！")
+        return embed
+
+class PrizeJoinView(View):
+    def __init__(self, prize_dict):
+        super().__init__(timeout=None)
+        for prize in prize_dict:
+            self.add_item(PrizeJoinButton(prize))
+        self.add_item(AllParticipantsButton())
 
 @bot.event
 async def on_ready():
@@ -294,6 +346,35 @@ async def add_prize(ctx, *, prize_input):
     
     if added:
         save_prizes()
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def show_prizes(ctx):
+    global prizes_data
+    try:
+        content = list(prizes_data.keys())[:5] if isinstance(prizes_data, dict) else prizes_data
+        logging.debug(f"執行 !show_prizes, prizes_data 類型: {type(prizes_data)}, 內容: {content}")
+    except Exception as e:
+        logging.error(f"記錄 prizes_data 失敗: {e}")
+    if not isinstance(prizes_data, dict):
+        logging.error(f"prizes_data 類型錯誤: {type(prizes_data)}, 內容: {prizes_data}")
+        embed = discord.Embed(
+            title="❌ 錯誤",
+            description="獎品資料異常，請聯繫管理員檢查 prizes_data.json。",
+            color=discord.Color.red()
+        )
+        await ctx.send(embed=embed)
+        return
+    if not prizes_data:
+        embed = discord.Embed(
+            title="📭 無獎品",
+            description="目前沒有獎品。請先用 !add_prize 新增。",
+            color=discord.Color.red()
+        )
+        await ctx.send(embed=embed)
+        return
+    view = PaginationView(prizes_data)
+    await ctx.send(embed=view.get_embed(), view=view)
 
 @bot.command()
 @commands.has_permissions(administrator=True)
@@ -354,7 +435,6 @@ async def prize_participants(ctx, *, prize_names):
 async def draw(ctx):
     global prizes_data
     
-    # 嚴格檢查 prizes_data
     print(f"DEBUG: prizes_data 類型: {type(prizes_data)}")
     print(f"DEBUG: prizes_data 內容: {prizes_data}")
     
@@ -367,16 +447,9 @@ async def draw(ctx):
         return
 
     msg = []
+    prize_names = list(prizes_data.keys())
     
-    # 安全地獲取獎品名稱列表
-    prize_names = []
-    for key in prizes_data:
-        if isinstance(key, str):
-            prize_names.append(key)
-    
-    print(f"DEBUG: 安全獲取的獎品名稱: {prize_names}")
-    
-    for name in prize_names[:]:  # 使用切片創建副本
+    for name in prize_names[:]:
         print(f"DEBUG: 處理獎品: {name}")
         
         if name not in prizes_data:
@@ -397,22 +470,16 @@ async def draw(ctx):
                 winners = random.sample(participants, actual_winners)
                 print(f"DEBUG: 抽中: {winners}")
                 
-                # 建立 @mention 列表
                 mention_list = []
-                
                 for participant_id in winners:
                     print(f"DEBUG: 處理參加者: {participant_id} (類型: {type(participant_id)})")
                     
                     user = None
                     try:
-                        # 嘗試轉換為整數 ID
                         user_id = int(participant_id)
                         print(f"DEBUG: 解析為 ID: {user_id}")
-                        
-                        # 先嘗試 get_member
                         user = ctx.guild.get_member(user_id)
                         if not user:
-                            # 再嘗試 fetch_member
                             print(f"DEBUG: get_member 失敗，嘗試 fetch_member")
                             try:
                                 user = await ctx.guild.fetch_member(user_id)
@@ -425,7 +492,6 @@ async def draw(ctx):
                             mention_list.append(user.mention)
                         else:
                             print(f"DEBUG: 找不到用戶 ID {user_id}")
-                            # 嘗試根據名稱查找
                             for member in ctx.guild.members:
                                 if str(member.id) == participant_id:
                                     user = member
@@ -437,7 +503,6 @@ async def draw(ctx):
                                 
                     except ValueError:
                         print(f"DEBUG: 非數字 ID，視為舊資料: {participant_id}")
-                        # 舊資料格式，嘗試名稱匹配
                         for member in ctx.guild.members:
                             if (member.display_name == participant_id or 
                                 member.name == participant_id):
@@ -448,24 +513,21 @@ async def draw(ctx):
                         else:
                             mention_list.append(f"**@{participant_id}**")
                 
-                # 建立得獎訊息
                 if len(winners) == 1:
                     winner_mentions = mention_list[0]
                 else:
                     winner_mentions = "、".join(mention_list[:-1]) + f" 和 {mention_list[-1]}"
                 
-                msg.append(f'🎉 "{name}", 恭喜得獎者: "{winner_mentions}"')
+                msg.append(f"🎉 恭喜 {winner_mentions} 獲得「{name}」！")
                 
             except ValueError as e:
                 print(f"DEBUG: 抽獎錯誤: {e}")
                 msg.append(f"😢 「{name}」參加者不足以抽出 {winner_count} 名得主。")
         
-        # 刪除獎品
         if name in prizes_data:
             del prizes_data[name]
             print(f"DEBUG: 已刪除獎品 {name}")
     
-    # 發送結果
     if msg:
         await ctx.send("\n".join(msg))
     else:
@@ -494,8 +556,7 @@ async def 啊偉(ctx):
 @bot.event
 async def on_member_join(member):
     welcome_message = "新成員進來請把名字改成遊戲裡的，方便識別，改完後請脫。"
-    # Option 1: Send to a specific channel (replace CHANNEL_ID with your channel ID)
-    channel = member.guild.get_channel(1301173686899838988)  # Replace CHANNEL_ID with actual ID
+    channel = member.guild.get_channel(1301173686899838988)
     if channel:
         await channel.send(f"{member.mention} {welcome_message}")
     else:
@@ -518,19 +579,17 @@ async def on_disconnect():
 @commands.has_permissions(administrator=True)
 async def backup(ctx):
     global prizes_data
-    if not isinstance(prizes_data, _builtin_dict):
+    if not isinstance(prizes_data, dict):
         logging.error(f"prizes_data 類型錯誤: {type(prizes_data)}, 內容: {prizes_data}")
         await ctx.send("❌ 獎品資料異常，無法備份。")
         return
     try:
-        # 確認檔案存在
         json_path = 'prizes_data.json'
         if not os.path.exists(json_path):
             logging.error("prizes_data.json 不存在")
             await ctx.send("❌ 找不到 prizes_data.json 檔案。")
             return
         
-        # 發送檔案附件
         with open(json_path, 'rb') as f:
             await ctx.send("✅ 備份檔案：", file=discord.File(f, 'prizes_data_backup.json'))
         
@@ -547,33 +606,29 @@ async def restore(ctx):
         await ctx.send("❌ 請上傳 prizes_data.json 檔案以進行還原。")
         return
     try:
-        # 獲取第一個附件
         attachment = ctx.message.attachments[0]
         if not attachment.filename.endswith('.json'):
             await ctx.send("❌ 請上傳 JSON 格式的檔案。")
             return
         
-        # 下載並讀取檔案內容
         file_content = await attachment.read()
         prizes_data = json.loads(file_content.decode('utf-8'))
         
-        # 驗證資料格式
-        if not isinstance(prizes_data, _builtin_dict):
+        if not isinstance(prizes_data, dict):
             logging.error(f"還原資料格式錯誤: {type(prizes_data)}")
             await ctx.send("❌ 還原檔案格式錯誤，必須是 JSON 物件。")
             return
         for name, data in prizes_data.items():
-            if not (isinstance(name, _builtin_str) and 
-                    isinstance(data, _builtin_dict) and
+            if not (isinstance(name, str) and 
+                    isinstance(data, dict) and
                     "participants" in data and 
-                    isinstance(data["participants"], _builtin_list) and
+                    isinstance(data["participants"], list) and
                     "winners" in data and 
-                    isinstance(data["winners"], _builtin_int)):
+                    isinstance(data["winners"], int)):
                 logging.error(f"還原資料結構無效: {name}, data: {data}")
                 await ctx.send("❌ 還原檔案結構無效，請檢查格式。")
                 return
         
-        # 保存到檔案
         with open('prizes_data.json', 'w', encoding='utf-8') as f:
             json.dump(prizes_data, f, ensure_ascii=False, indent=2)
         
