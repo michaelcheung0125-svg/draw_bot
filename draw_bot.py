@@ -354,7 +354,6 @@ async def prize_participants(ctx, *, prize_names):
 async def draw(ctx):
     global prizes_data
     
-    # 嚴格檢查 prizes_data
     print(f"DEBUG: prizes_data 類型: {type(prizes_data)}")
     print(f"DEBUG: prizes_data 內容: {prizes_data}")
     
@@ -366,110 +365,124 @@ async def draw(ctx):
         await ctx.send("📭 目前沒有獎品。")
         return
 
-    msg = []
-    
-    # 安全地獲取獎品名稱列表
-    prize_names = []
-    for key in prizes_data:
-        if isinstance(key, str):
-            prize_names.append(key)
-    
-    print(f"DEBUG: 安全獲取的獎品名稱: {prize_names}")
-    
-    for name in prize_names[:]:  # 使用切片創建副本
-        print(f"DEBUG: 處理獎品: {name}")
+    prize_names = list(prizes_data.keys())
+    prize_items = list(prizes_data.items())
+    page_size = 10  # 每頁最多 10 項獎品
+    total_pages = math.ceil(len(prize_items) / page_size)
+    fetch_count = 0  # 計數 fetch_member 調用次數
+    member_cache = {member.id: member for member in ctx.guild.members}
+    logging.debug(f"已緩存 {len(member_cache)} 個成員（guild.members）")
+
+    for page in range(total_pages):
+        embed = discord.Embed(
+            title=f"🎉 抽獎結果 (頁 {page + 1}/{total_pages})",
+            description="以下是本次抽獎的得獎名單：",
+            color=discord.Color.red()
+        )
+        start_idx = page * page_size
+        end_idx = min(start_idx + page_size, len(prize_items))
         
-        if name not in prizes_data:
-            print(f"DEBUG: 獎品 {name} 已不存在，跳過")
-            continue
-        
-        info = prizes_data[name]
-        participants = info.get("participants", [])
-        winner_count = info.get("winners", 1)
-        
-        print(f"DEBUG: 獎品 {name} - 參加者: {len(participants)}, 得主數: {winner_count}")
-        
-        if not participants:
-            msg.append(f"😢 「{name}」沒有人參加，無法抽獎。")
-        else:
-            actual_winners = min(winner_count, len(participants))
-            try:
-                winners = random.sample(participants, actual_winners)
-                print(f"DEBUG: 抽中: {winners}")
-                
-                # 建立 @mention 列表
-                mention_list = []
-                
-                for participant_id in winners:
-                    print(f"DEBUG: 處理參加者: {participant_id} (類型: {type(participant_id)})")
+        for name, info in prize_items[start_idx:end_idx]:
+            participants = info.get("participants", [])
+            winner_count = info.get("winners", 1)
+            print(f"DEBUG: 處理獎品: {name}, 參加者: {len(participants)}, 得主數: {winner_count}")
+            
+            if not participants:
+                embed.add_field(
+                    name=f"📦 {name}（{winner_count}人）",
+                    value="😢 沒有人參加，無法抽獎。",
+                    inline=False
+                )
+            else:
+                actual_winners = min(winner_count, len(participants))
+                try:
+                    winners = random.sample(participants, actual_winners)
+                    print(f"DEBUG: 抽中: {winners}")
                     
-                    user = None
-                    try:
-                        # 嘗試轉換為整數 ID
-                        user_id = int(participant_id)
-                        print(f"DEBUG: 解析為 ID: {user_id}")
-                        
-                        # 先嘗試 get_member
-                        user = ctx.guild.get_member(user_id)
-                        if not user:
-                            # 再嘗試 fetch_member
-                            print(f"DEBUG: get_member 失敗，嘗試 fetch_member")
-                            try:
-                                user = await ctx.guild.fetch_member(user_id)
-                                print(f"DEBUG: fetch_member 成功")
-                            except Exception as e:
-                                print(f"DEBUG: fetch_member 失敗: {e}")
-                        
-                        if user:
-                            print(f"DEBUG: 成功找到用戶: {user.display_name} (ID: {user.id})")
-                            mention_list.append(user.mention)
-                        else:
-                            print(f"DEBUG: 找不到用戶 ID {user_id}")
-                            # 嘗試根據名稱查找
+                    mention_list = []
+                    for participant_id in winners:
+                        print(f"DEBUG: 處理參加者: {participant_id} (類型: {type(participant_id)})")
+                        user = None
+                        try:
+                            user_id = int(participant_id)
+                            print(f"DEBUG: 解析為 ID: {user_id}")
+                            user = member_cache.get(user_id)
+                            if not user:
+                                if fetch_count < 50:  # 限制最大 fetch_member 調用次數
+                                    try:
+                                        user = await ctx.guild.fetch_member(user_id)
+                                        member_cache[user_id] = user
+                                        print(f"DEBUG: fetch_member 成功")
+                                        fetch_count += 1
+                                        if fetch_count % 10 == 0:
+                                            await asyncio.sleep(1.0)
+                                    except Exception as e:
+                                        print(f"DEBUG: fetch_member 失敗: {e}")
+                            if user:
+                                print(f"DEBUG: 成功找到用戶: {user.display_name} (ID: {user.id})")
+                                mention_list.append(user.mention)
+                            else:
+                                print(f"DEBUG: 找不到用戶 ID {user_id}")
+                                mention_list.append(f"**ID:{participant_id}**")
+                        except ValueError:
+                            print(f"DEBUG: 非數字 ID，視為舊資料: {participant_id}")
                             for member in ctx.guild.members:
-                                if str(member.id) == participant_id:
+                                if (member.display_name == participant_id or 
+                                    member.name == participant_id):
                                     user = member
                                     mention_list.append(user.mention)
-                                    print(f"DEBUG: 通過成員列表找到: {user.display_name}")
+                                    print(f"DEBUG: 名稱匹配成功: {user.display_name}")
                                     break
                             else:
-                                mention_list.append(f"**ID:{participant_id}**")
-                                
-                    except ValueError:
-                        print(f"DEBUG: 非數字 ID，視為舊資料: {participant_id}")
-                        # 舊資料格式，嘗試名稱匹配
-                        for member in ctx.guild.members:
-                            if (member.display_name == participant_id or 
-                                member.name == participant_id):
-                                user = member
-                                mention_list.append(user.mention)
-                                print(f"DEBUG: 名稱匹配成功: {user.display_name}")
-                                break
-                        else:
-                            mention_list.append(f"**@{participant_id}**")
-                
-                # 建立得獎訊息
-                if len(winners) == 1:
-                    winner_mentions = mention_list[0]
-                else:
-                    winner_mentions = "、".join(mention_list[:-1]) + f" 和 {mention_list[-1]}"
-                
-                msg.append(f'🎉 "{name}", 恭喜得獎者: "{winner_mentions}"')
-                
-            except ValueError as e:
-                print(f"DEBUG: 抽獎錯誤: {e}")
-                msg.append(f"😢 「{name}」參加者不足以抽出 {winner_count} 名得主。")
+                                mention_list.append(f"**@{participant_id}**")
+                    
+                    if len(winners) == 1:
+                        winner_mentions = mention_list[0]
+                    elif len(winners) > 3:
+                        winner_mentions = ", ".join(mention_list[:3]) + " 等..."
+                    else:
+                        winner_mentions = ", ".join(mention_list[:-1]) + f" 和 {mention_list[-1]}"
+                    
+                    field_value = f"🎉 恭喜 {winner_mentions} 獲得！"
+                    if len(field_value) > 1024:
+                        field_value = field_value[:1020] + "..."
+                    embed.add_field(
+                        name=f"📦 {name}（{actual_winners}人）",
+                        value=field_value,
+                        inline=False
+                    )
+                except ValueError as e:
+                    print(f"DEBUG: 抽獎錯誤: {e}")
+                    embed.add_field(
+                        name=f"📦 {name}（{winner_count}人）",
+                        value="😢 參加者不足以抽出指定數量的得主。",
+                        inline=False
+                    )
+            
+            if name in prizes_data:
+                del prizes_data[name]
+                print(f"DEBUG: 已刪除獎品 {name}")
         
-        # 刪除獎品
-        if name in prizes_data:
-            del prizes_data[name]
-            print(f"DEBUG: 已刪除獎品 {name}")
-    
-    # 發送結果
-    if msg:
-        await ctx.send("\n".join(msg))
-    else:
-        await ctx.send("沒有可處理的獎品。")
+        # 檢查嵌入大小
+        embed_size = len(str(embed))
+        if embed_size > 6000:
+            logging.warning(f"抽獎頁 {page + 1} 嵌入過大: {embed_size} 字元")
+            embed = discord.Embed(
+                title=f"🎉 抽獎結果 (頁 {page + 1}/{total_pages})",
+                description="部分得獎名單過長，無法顯示完整內容。",
+                color=discord.Color.red()
+            )
+            embed.add_field(
+                name="⚠️ 警告",
+                value="請減少每項獎品的得獎者數量或聯繫管理員。",
+                inline=False
+            )
+        
+        embed.set_footer(text="請遵守抽獎規則！")
+        await ctx.send(embed=embed)
+        logging.debug(f"發送抽獎結果頁 {page + 1}, 字元數: {embed_size}")
+        if page < total_pages - 1:
+            await asyncio.sleep(0.2)  # 頁面間延遲
     
     save_prizes()
     print("DEBUG: 抽獎完成")
