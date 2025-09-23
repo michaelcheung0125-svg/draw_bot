@@ -137,6 +137,62 @@ class AllParticipantsButton(Button):
                 msg.append("📭 尚無參加者")
         await interaction.response.send_message("\n".join(msg), ephemeral=True)
 
+
+class PaginationView(View):
+    def __init__(self, prize_dict, page_size=10):
+        super().__init__(timeout=300)  # 5 分鐘超時
+        self.prize_dict = prize_dict
+        self.page_size = page_size
+        self.current_page = 0
+        self.total_pages = (len(prize_dict) + page_size - 1) // page_size
+        self.update_buttons()
+
+    def update_buttons(self):
+        self.clear_items()
+        # 上一頁按鈕
+        prev_button = Button(label="上一頁", style=discord.ButtonStyle.secondary, disabled=self.current_page == 0)
+        prev_button.callback = self.prev_page
+        self.add_item(prev_button)
+        # 下一頁按鈕
+        next_button = Button(label="下一頁", style=discord.ButtonStyle.secondary, disabled=self.current_page == self.total_pages - 1)
+        next_button.callback = self.next_page
+        self.add_item(next_button)
+        # 參加抽獎按鈕（當前頁的獎品）
+        start_idx = self.current_page * self.page_size
+        end_idx = min(start_idx + self.page_size, len(self.prize_dict))
+        for prize in list(self.prize_dict.keys())[start_idx:end_idx]:
+            self.add_item(PrizeJoinButton(prize))
+        # 查看所有參加者按鈕
+        self.add_item(AllParticipantsButton())
+
+    async def prev_page(self, interaction: discord.Interaction):
+        self.current_page -= 1
+        self.update_buttons()
+        await interaction.response.edit_message(embed=self.get_embed(), view=self)
+
+    async def next_page(self, interaction: discord.Interaction):
+        self.current_page += 1
+        self.update_buttons()
+        await interaction.response.edit_message(embed=self.get_embed(), view=self)
+
+    def get_embed(self):
+        embed = discord.Embed(
+            title="🎁 焰獄拍賣會獎品清單",
+            description="請點擊下方按鈕參加你想要的獎品抽獎，或查看所有參加者清單：",
+            color=discord.Color.red()  # 紅色邊框
+        )
+        start_idx = self.current_page * self.page_size
+        end_idx = min(start_idx + self.page_size, len(self.prize_dict))
+        for prize, info in list(self.prize_dict.items())[start_idx:end_idx]:
+            embed.add_field(
+                name=f"📦 {prize}",
+                value=f"**得獎人數**：{info['winners']}\n**參加者**：{len(info['participants'])} 人",
+                inline=True
+            )
+        embed.set_footer(text=f"頁數：{self.current_page + 1}/{self.total_pages} | 請遵守抽獎規則！")
+        return embed
+    
+    
 class PrizeJoinView(View):
     def __init__(self, prize_dict):
         super().__init__(timeout=None)
@@ -188,13 +244,15 @@ async def add_prize(ctx, *, prize_input):
 @commands.has_permissions(administrator=True)
 async def show_prizes(ctx):
     if not prizes_data:
-        await ctx.send("📭 目前沒有獎品。請先用 !add_prize 新增。")
+        embed = discord.Embed(
+            title="📭 無獎品",
+            description="目前沒有獎品。請先用 !add_prize 新增。",
+            color=discord.Color.red()
+        )
+        await ctx.send(embed=embed)
         return
-    description = "請點擊下方按鈕參加你想要的獎品抽獎，或查看所有參加者清單："
-    for prize, info in prizes_data.items():
-        description += f"\n📦 {prize}（{info['winners']}人）"
-    view = PrizeJoinView(prizes_data)
-    await ctx.send(description, view=view)
+    view = PaginationView(prizes_data)
+    await ctx.send(embed=view.get_embed(), view=view)
 
 @bot.command()
 @commands.has_permissions(administrator=True)
