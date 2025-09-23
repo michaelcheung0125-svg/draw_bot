@@ -153,7 +153,7 @@ class PaginationView(View):
         self.page_size = page_size
         self.current_page = 0
         self.total_pages = (len(prize_dict) + page_size - 1) // page_size if prize_dict else 1
-        logging.debug(f"初始化 PaginationView: 總獎品數 {len(prize_dict)}, 總頁數 {self.total_pages}, prize_dict: {list(prize_dict.keys())[:5]}...")
+        logging.debug(f"初始化 PaginationView: 總獎品數 {len(prize_dict)}, 總頁數 {self.total_pages}, prize_dict: {[k for k in prize_dict.keys()][:5]}...")
         self.update_buttons()
 
     def update_buttons(self):
@@ -170,7 +170,7 @@ class PaginationView(View):
         start_idx = self.current_page * self.page_size
         end_idx = min(start_idx + self.page_size, len(self.prize_dict))
         try:
-            prize_keys = list(self.prize_dict.keys())  # 明確轉為列表
+            prize_keys = [k for k in self.prize_dict.keys()]  # 使用列表推導式避免影子問題
             logging.debug(f"update_buttons: prize_keys 類型: {type(prize_keys)}, 長度: {len(prize_keys)}, 前5項: {prize_keys[:5]}")
             for prize in prize_keys[start_idx:end_idx]:
                 self.add_item(PrizeJoinButton(prize))
@@ -208,7 +208,7 @@ class PaginationView(View):
             start_idx = self.current_page * self.page_size
             end_idx = min(start_idx + self.page_size, len(self.prize_dict))
             try:
-                prize_items = list(self.prize_dict.items())[start_idx:end_idx]
+                prize_items = [item for item in self.prize_dict.items()][start_idx:end_idx]
                 logging.debug(f"get_embed: 顯示獎品索引 {start_idx} 到 {end_idx}, 項目: {[name for name, _ in prize_items]}")
                 for prize, info in prize_items:
                     embed.add_field(
@@ -278,7 +278,11 @@ async def add_prize(ctx, *, prize_input):
 @commands.has_permissions(administrator=True)
 async def show_prizes(ctx):
     global prizes_data
-    logging.debug(f"執行 !show_prizes, prizes_data 類型: {type(prizes_data)}, 內容: {list(prizes_data.keys())[:5] if isinstance(prizes_data, dict) else prizes_data}")
+    try:
+        content = [k for k in prizes_data.keys()][:5] if isinstance(prizes_data, dict) else prizes_data
+        logging.debug(f"執行 !show_prizes, prizes_data 類型: {type(prizes_data)}, 內容: {content}")
+    except Exception as e:
+        logging.error(f"記錄 prizes_data 失敗: {e}")
     if not isinstance(prizes_data, dict):
         logging.error(f"prizes_data 類型錯誤: {type(prizes_data)}, 內容: {prizes_data}")
         embed = discord.Embed(
