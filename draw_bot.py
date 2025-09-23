@@ -138,13 +138,21 @@ class AllParticipantsButton(Button):
         await interaction.response.send_message("\n".join(msg), ephemeral=True)
 
 
+# 設置日誌
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+
 class PaginationView(View):
     def __init__(self, prize_dict, page_size=10):
         super().__init__(timeout=300)  # 5 分鐘超時
+        # 確保 prize_dict 是字典
+        if not isinstance(prize_dict, dict):
+            logging.error(f"PaginationView 初始化失敗: prize_dict 類型為 {type(prize_dict)}，預期為 dict")
+            raise ValueError("prize_dict 必須是字典")
         self.prize_dict = prize_dict
         self.page_size = page_size
         self.current_page = 0
-        self.total_pages = (len(prize_dict) + page_size - 1) // page_size
+        self.total_pages = (len(prize_dict) + page_size - 1) // page_size if prize_dict else 1
+        logging.debug(f"初始化 PaginationView: 總獎品數 {len(prize_dict)}, 總頁數 {self.total_pages}")
         self.update_buttons()
 
     def update_buttons(self):
@@ -160,7 +168,9 @@ class PaginationView(View):
         # 參加抽獎按鈕（當前頁的獎品）
         start_idx = self.current_page * self.page_size
         end_idx = min(start_idx + self.page_size, len(self.prize_dict))
-        for prize in list(self.prize_dict.keys())[start_idx:end_idx]:
+        prize_keys = list(self.prize_dict.keys())
+        logging.debug(f"更新按鈕: 當前頁 {self.current_page}, 顯示獎品索引 {start_idx} 到 {end_idx}")
+        for prize in prize_keys[start_idx:end_idx]:
             self.add_item(PrizeJoinButton(prize))
         # 查看所有參加者按鈕
         self.add_item(AllParticipantsButton())
@@ -168,11 +178,13 @@ class PaginationView(View):
     async def prev_page(self, interaction: discord.Interaction):
         self.current_page -= 1
         self.update_buttons()
+        logging.debug(f"切換到上一頁: 當前頁 {self.current_page}")
         await interaction.response.edit_message(embed=self.get_embed(), view=self)
 
     async def next_page(self, interaction: discord.Interaction):
         self.current_page += 1
         self.update_buttons()
+        logging.debug(f"切換到下一頁: 當前頁 {self.current_page}")
         await interaction.response.edit_message(embed=self.get_embed(), view=self)
 
     def get_embed(self):
@@ -181,18 +193,25 @@ class PaginationView(View):
             description="請點擊下方按鈕參加你想要的獎品抽獎，或查看所有參加者清單：",
             color=discord.Color.red()  # 紅色邊框
         )
-        start_idx = self.current_page * self.page_size
-        end_idx = min(start_idx + self.page_size, len(self.prize_dict))
-        for prize, info in list(self.prize_dict.items())[start_idx:end_idx]:
+        if not self.prize_dict:
             embed.add_field(
-                name=f"📦 {prize}",
-                value=f"**得獎人數**：{info['winners']}\n**參加者**：{len(info['participants'])} 人",
-                inline=True
+                name="📭 無獎品",
+                value="目前沒有獎品，請使用 !add_prize 新增。",
+                inline=False
             )
+        else:
+            start_idx = self.current_page * self.page_size
+            end_idx = min(start_idx + self.page_size, len(self.prize_dict))
+            for prize, info in list(self.prize_dict.items())[start_idx:end_idx]:
+                embed.add_field(
+                    name=f"📦 {prize}",
+                    value=f"**得獎人數**：{info['winners']}\n**參加者**：{len(info['participants'])} 人",
+                    inline=True
+                )
         embed.set_footer(text=f"頁數：{self.current_page + 1}/{self.total_pages} | 請遵守抽獎規則！")
         return embed
     
-    
+
 class PrizeJoinView(View):
     def __init__(self, prize_dict):
         super().__init__(timeout=None)
@@ -243,6 +262,17 @@ async def add_prize(ctx, *, prize_input):
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def show_prizes(ctx):
+    global prizes_data
+    logging.debug(f"執行 !show_prizes, prizes_data 類型: {type(prizes_data)}, 內容: {prizes_data}")
+    if not isinstance(prizes_data, dict):
+        logging.error(f"prizes_data 類型錯誤: {type(prizes_data)}")
+        embed = discord.Embed(
+            title="❌ 錯誤",
+            description="獎品資料異常，請聯繫管理員檢查 prizes_data.json。",
+            color=discord.Color.red()
+        )
+        await ctx.send(embed=embed)
+        return
     if not prizes_data:
         embed = discord.Embed(
             title="📭 無獎品",
