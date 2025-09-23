@@ -122,14 +122,54 @@ class AllParticipantsButton(Button):
         page_size = 10  # 每頁最多 10 項獎品
         total_pages = math.ceil(len(prize_items) / page_size)
 
-        for page in range(total_pages):
-            start_idx = page * page_size
-            end_idx = min(start_idx + page_size, len(prize_items))
+        # 立即回應第一頁，避免交互超時
+        embed = discord.Embed(
+            title=f"🎁 所有獎品參加者清單 (頁 1/{total_pages})",
+            description="以下是各獎品的參加者名單：",
+            color=discord.Color.red()
+        )
+        start_idx = 0
+        end_idx = min(page_size, len(prize_items))
+        
+        for prize, info in prize_items[start_idx:end_idx]:
+            participant_names = []
+            for participant_id in info["participants"]:
+                try:
+                    user_id = int(participant_id)
+                    user = guild.get_member(user_id)
+                    if not user:
+                        try:
+                            user = await guild.fetch_member(user_id)
+                        except discord.NotFound:
+                            user = None
+                        except Exception as e:
+                            logging.error(f"fetch_member 失敗: {e}")
+                    if user:
+                        participant_names.append(user.display_name)
+                    else:
+                        participant_names.append(f"ID:{participant_id}")
+                except ValueError:
+                    participant_names.append(participant_id)
+            
+            participants_str = ", ".join(participant_names) if participant_names else "📭 尚無參加者"
+            embed.add_field(
+                name=f"📦 {prize}（{info['winners']}人）",
+                value=f"👥 參加者：{participants_str}",
+                inline=False
+            )
+        
+        embed.set_footer(text="請遵守抽獎規則！")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        # 處理後續頁
+        for page in range(1, total_pages):
             embed = discord.Embed(
                 title=f"🎁 所有獎品參加者清單 (頁 {page + 1}/{total_pages})",
                 description="以下是各獎品的參加者名單：",
                 color=discord.Color.red()
             )
+            start_idx = page * page_size
+            end_idx = min(start_idx + page_size, len(prize_items))
             
             for prize, info in prize_items[start_idx:end_idx]:
                 participant_names = []
@@ -159,7 +199,9 @@ class AllParticipantsButton(Button):
                 )
             
             embed.set_footer(text="請遵守抽獎規則！")
-            await interaction.response.send_message(embed=embed, ephemeral=True) if page == 0 else await interaction.followup.send(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            # 添加延遲，避免 API 限制
+            await asyncio.sleep(0.5)
 
 # 設置日誌
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
