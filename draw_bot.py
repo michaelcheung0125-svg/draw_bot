@@ -143,9 +143,8 @@ class AllParticipantsButton(Button):
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class PaginationView(View):
-    def __init__(self, prize_dict, page_size=10):
+    def __init__(self, prize_dict, page_size=12):  # 調整為 12 項/頁
         super().__init__(timeout=300)  # 5 分鐘超時
-        # 確保 prize_dict 是字典
         if not isinstance(prize_dict, dict):
             logging.error(f"PaginationView 初始化失敗: prize_dict 類型為 {type(prize_dict)}, 內容: {prize_dict}")
             raise ValueError("prize_dict 必須是字典")
@@ -158,14 +157,6 @@ class PaginationView(View):
 
     def update_buttons(self):
         self.clear_items()
-        # 上一頁按鈕
-        prev_button = Button(label="上一頁", style=discord.ButtonStyle.secondary, disabled=self.current_page == 0)
-        prev_button.callback = self.prev_page
-        self.add_item(prev_button)
-        # 下一頁按鈕
-        next_button = Button(label="下一頁", style=discord.ButtonStyle.secondary, disabled=self.current_page == self.total_pages - 1)
-        next_button.callback = self.next_page
-        self.add_item(next_button)
         # 參加抽獎按鈕（當前頁的獎品）
         start_idx = self.current_page * self.page_size
         end_idx = min(start_idx + self.page_size, len(self.prize_dict))
@@ -177,7 +168,13 @@ class PaginationView(View):
         except Exception as e:
             logging.error(f"生成按鈕失敗: {e}, prize_dict 類型: {type(self.prize_dict)}, keys 類型: {type(self.prize_dict.keys())}")
             raise
-        # 查看所有參加者按鈕
+        # 底部的控制按鈕（上一頁、下一頁、查看所有參加者）
+        prev_button = Button(label="上一頁", style=discord.ButtonStyle.secondary, disabled=self.current_page == 0)
+        prev_button.callback = self.prev_page
+        self.add_item(prev_button)
+        next_button = Button(label="下一頁", style=discord.ButtonStyle.secondary, disabled=self.current_page == self.total_pages - 1)
+        next_button.callback = self.next_page
+        self.add_item(next_button)
         self.add_item(AllParticipantsButton())
 
     async def prev_page(self, interaction: discord.Interaction):
