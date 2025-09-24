@@ -223,7 +223,7 @@ async def show_prizes(ctx):
 
     # 發送每頁的嵌入訊息
     for page in range(total_pages):
-        view = View(timeout=300)  # 每頁獨立的 View
+        view = View(timeout=None)  # 每頁獨立的 View
         start_idx = page * page_size
         end_idx = min(start_idx + page_size, len(prize_items))
         embed = discord.Embed(
