@@ -11,10 +11,12 @@ import keep_alive
 import asyncio
 import time
 import datetime
+import pytz
 
 load_dotenv()
 TOKEN = os.getenv('TOKEN')
 BACKUP_USER_ID = os.getenv('BACKUP_USER_ID')
+TIMEZONE = os.getenv('TIMEZONE', 'Asia/Hong_Kong')
 
 if not TOKEN:
     print("❌ 錯誤：找不到 TOKEN 環境變數")
@@ -25,10 +27,13 @@ if not BACKUP_USER_ID:
 
 print(f"✅ Token 已安全載入")
 print(f"✅ Backup User ID 已載入: {BACKUP_USER_ID}")
+print(f"✅ Time Zone: {TIMEZONE}")
 
 # Global cooldown tracker
-last_backup_time = 0  # Tracks last backup timestamp
-BACKUP_COOLDOWN = 60  # 60 seconds cooldown
+last_backup_time = 0
+BACKUP_COOLDOWN = 60
+backup_lock = asyncio.Lock()  # Lock to serialize backup tasks
+backup_pending = False  # Flag to track pending backup
 
 
 # 初始化 prizes 變量 - 確保是乾淨的字典
@@ -65,40 +70,54 @@ def load_prizes():
 
 
 async def send_backup_to_user():
-    global last_backup_time
-    try:
-        # Calculate time since last backup
-        current_time = time.time()
-        time_since_last_backup = current_time - last_backup_time
-        
-        # If within cooldown, wait until 60 seconds have passed
-        if time_since_last_backup < BACKUP_COOLDOWN:
-            wait_time = BACKUP_COOLDOWN - time_since_last_backup
-            logging.debug(f"備份冷卻中，等待 {wait_time:.2f} 秒")
-            await asyncio.sleep(wait_time)
-        
-        # Update last backup time
-        last_backup_time = time.time()
-        
-        json_path = 'prizes_data.json'
-        if not os.path.exists(json_path):
-            logging.error("備份失敗：prizes_data.json 不存在")
+    global last_backup_time, backup_pending
+    async with backup_lock:  # Ensure only one backup task runs at a time
+        if backup_pending:
+            logging.debug("已有備份任務在等待，跳過重複調用")
             return
         
-        user = await bot.fetch_user(int(BACKUP_USER_ID))
-        if not user:
-            logging.error(f"備份失敗：找不到用戶 ID {BACKUP_USER_ID}")
-            return
+        backup_pending = True
+        try:
+            # Calculate time since last backup
+            current_time = time.time()
+            time_since_last_backup = current_time - last_backup_time
+            
+            # Wait if within cooldown
+            if time_since_last_backup < BACKUP_COOLDOWN:
+                wait_time = BACKUP_COOLDOWN - time_since_last_backup
+                logging.debug(f"備份冷卻中，等待 {wait_time:.2f} 秒")
+                await asyncio.sleep(wait_time)
+            
+            # Update last backup time
+            last_backup_time = time.time()
+            
+            json_path = 'prizes_data.json'
+            if not os.path.exists(json_path):
+                logging.error("備份失敗：prizes_data.json 不存在")
+                return
+            
+            user = await bot.fetch_user(int(BACKUP_USER_ID))
+            if not user:
+                logging.error(f"備份失敗：找不到用戶 ID {BACKUP_USER_ID}")
+                return
 
-        # Send file via DM with timestamp
-        with open(json_path, 'rb') as f:
-            await user.send(f"📤 自動備份 prizes_data.json ({datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')})", 
-                          file=discord.File(f, 'prizes_data_backup.json'))
-        logging.debug(f"成功發送備份到用戶 {BACKUP_USER_ID}")
-    except discord.errors.Forbidden:
-        logging.error(f"備份失敗：無法向用戶 {BACKUP_USER_ID} 發送 DM（可能被封鎖或未啟用 DM）")
-    except Exception as e:
-        logging.error(f"備份失敗：{e}")
+            # Get current time in specified time zone
+            tz = pytz.timezone(TIMEZONE)
+            timestamp = datetime.datetime.now(tz).strftime('%Y-%m-%d %H:%M:%S %Z')
+            
+            # Send file via DM with timestamp
+            with open(json_path, 'rb') as f:
+                await user.send(f"📤 自動備份 prizes_data.json ({timestamp})", 
+                              file=discord.File(f, 'prizes_data_backup.json'))
+            logging.debug(f"成功發送備份到用戶 {BACKUP_USER_ID}")
+        except discord.errors.Forbidden:
+            logging.error(f"備份失敗：無法向用戶 {BACKUP_USER_ID} 發送 DM（可能被封鎖或未啟用 DM）")
+        except pytz.exceptions.UnknownTimeZoneError:
+            logging.error(f"無效的時區設定: {TIMEZONE}")
+        except Exception as e:
+            logging.error(f"備份失敗：{e}")
+        finally:
+            backup_pending = False  # Reset flag after task completes
 
 
 
