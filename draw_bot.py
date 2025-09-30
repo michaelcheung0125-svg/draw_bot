@@ -508,7 +508,7 @@ async def draw(ctx):
                     
                     if len(winners) == 1:
                         winner_mentions = mention_list[0]
-                    elif len(winners) > 3:
+                    elif len(winners) > 7:
                         winner_mentions = ", ".join(mention_list[:3]) + " 等..."
                     else:
                         winner_mentions = ", ".join(mention_list[:-1]) + f" 和 {mention_list[-1]}"
